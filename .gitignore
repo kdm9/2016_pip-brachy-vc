@@ -1,0 +1,11 @@
+*.swp
+*.pyc
+*/config.json
+
+.snakemake
+
+data
+logs
+*.log
+reads
+reference
