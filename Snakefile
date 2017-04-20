@@ -1,15 +1,21 @@
 SAMPLES = config['samples']
-REFERENCE = "data/reference/Egrandis_v2.fasta"
+REFERENCE = "data/reference/Bdistachyon_314_v3.0.fa"
+VARCALLERS = ['mpileup', 'freebayes']
 
 # bash safe mode
 shell.executable("/bin/bash")
 shell.prefix("set -euo pipefail; ")
 
+onsuccess:
+    shell("mail -s 'Workflow complete' kevin.murray@anu.edu.au pip.wilson@anu.edu.au < {log}")
+onerror:
+    shell("mail -s 'Workflow error' kevin.murray@anu.edu.au < {log}")
 
 
 rule all:
     input:
-        expand("data/reads/qc/{sample}_il.fastq.gz", sample=SAMPLES)
+        expand("data/reads/qc/{sample}_il.fastq.gz", sample=SAMPLES),
+        expand("data/variants_filtered/{vcf}_strict.vcf.gz", vcf=VARCALLERS),
 
 
 rule qcreads:
@@ -40,7 +46,7 @@ rule align:
         "data/alignments/{sample}.bam"
     log:
         "data/logs/align/{sample}.log"
-    threads: 8
+    threads: 4
     params:
         ref=REFERENCE,
     shell:
@@ -77,58 +83,33 @@ rule mpileup:
     input:
         "data/merged.bam"
     output:
-        "data/variants/samplewise-mpileup-raw.vcf"
+        "data/variants/mpileup.bcf"
     log:
         "data/logs/mpileup.log"
-    threads: 1
-    shell:
-        "( samtools mpileup"
-        "   -C 50" # Cap MQ
-        "   -d 5000" # Max depth
-        "   -u" # uncompressed bcf
-        "   -E" # redo baq calc
-        "   -t AD" # allele depth tag
-        "   -t INFO/AD" # allele depth info
-        "   -t DP" # read depth tag
-        "   {input}"
-        "| bcftools call -vm -"
-        "   >{output}"
-        " ) 2>{log}"
-
-rule mpileup_all:
-    input:
-        "data/merged.bam"
-    output:
-        "data/variants/concat-mpileup-raw.bcf"
-    log:
-        "data/logs/mpileup-all.log"
-    threads: 1
     params:
         ref=REFERENCE,
+    threads: 1
     shell:
         "( samtools mpileup"
-        "   -R" # ignore rg, treat all as one sample
-        "   -C 50" # Cap MQ
-        "   -f {params.ref}"
         "   -d 5000" # Max depth
-        "   -u" # uncompressed bcf
-        "   -E" # redo baq calc
         "   -t AD" # allele depth tag
         "   -t INFO/AD" # allele depth info
         "   -t DP" # read depth tag
+        "   -gu"
+        "   -f {params.ref}"
         "   {input}"
         "| bcftools call"
-        "    -mv"
-        "    -Ob"
-        "    -o {output}"
-        "    -" # stdin
+        "   -vm"
+        "   -Ob"
+        "   -o {output}"
+        "   -" # stdin
         " ) 2>{log}"
 
 rule freebayes:
     input:
         "data/merged.bam"
     output:
-        "data/variants/freebayes-raw.vcf"
+        "data/variants/freebayes.bcf"
     log:
         "data/logs/freebayes.log"
     threads: 1
@@ -138,43 +119,27 @@ rule freebayes:
         "( freebayes"
         "   -f {params.ref}"
         "   {input}"
-        "   >{output}"
-        " ) 2>{log}"
-
-rule freebayes_par:
-    input:
-        "data/merged.bam"
-    output:
-        "data/variants/par-freebayes-raw.vcf"
-    log:
-        "data/logs/freebayes.log"
-    threads: 12
-    params:
-        ref=REFERENCE,
-    shell:
-        "( freebayes-parallel"
-        "   {params.ref}.freebayes_regions"
-        "   {threads}"
-        "   -f {params.ref}"
-        "   {input}"
-        "   >{output}"
+        " | bcftools view"
+        "   -o {output}"
+        "   -O b"
+        "   -"  # STDIN
         " ) 2>{log}"
 
 rule vcffilt:
     input:
         "data/variants/{vcf}.bcf"
     output:
-        "data/variants_filtered/{vcf}.vcf.gz"
+        "data/variants_filtered/{vcf}_strict.vcf.gz"
     log:
         "data/logs/vcffilt-{vcf}.log"
     threads: 1
     params:
         ref=REFERENCE,
     shell:
-        "( bcftools filter"
+        "( bcftools view"
         " -o {output}"
         " -Oz"
-        " -e 'QUAL < 40'"
+        " -e 'QUAL < 20 || MAF <= 0.02'" # exclude sites
+        " -g '^het'" # filter out hets
         " {input}"
         " ) 2>{log}"
-
